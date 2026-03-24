@@ -11,7 +11,9 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 # ─── Configuración ────────────────────────────────────────────────────────────
-CFGUTIL="/Library/Apple/usr/bin/cfgutil"
+CFGUTIL=$(command -v cfgutil 2>/dev/null \
+  || ls /Library/Apple/usr/bin/cfgutil /usr/local/bin/cfgutil 2>/dev/null | head -1 \
+  || echo "")
 LOG_DIR="$HOME/mac-restore-logs"
 IPSW_DIR="${IPSW_DIR:-$HOME/Downloads}"          # Carpeta donde buscar IPSW
 PARALLEL_MAX="${PARALLEL_MAX:-4}"                 # Máximo de restores simultáneos
