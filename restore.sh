@@ -28,6 +28,10 @@ RETRY_WAIT="${RETRY_WAIT:-30}"
 POLL_INTERVAL=5
 SELECTED_IPSW=""
 
+# ─── Sonidos ──────────────────────────────────────────────────────────────────
+play_ok()  { afplay /System/Library/Sounds/Glass.aiff  2>/dev/null & }
+play_err() { afplay /System/Library/Sounds/Basso.aiff  2>/dev/null & }
+
 # ─── Banner ───────────────────────────────────────────────────────────────────
 banner() {
   echo -e "${BOLD}${CYAN}"
@@ -154,6 +158,7 @@ restore_device() {
 
     if "$CFGUTIL" --ecid "$ecid" restore -I "$ipsw" >> "$device_log" 2>&1; then
       log_ok "Restore completado (intento $attempt) — ECID: ${CYAN}${ecid}${NC}"
+      play_ok
       return 0
     fi
 
@@ -162,6 +167,7 @@ restore_device() {
   done
 
   log_err "Restore FALLIDO tras $MAX_RETRIES intentos — ECID: ${CYAN}${ecid}${NC} — ver: $device_log"
+  play_err
   return 1
 }
 
