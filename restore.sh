@@ -4,20 +4,27 @@
 #  Requiere: Apple Configurator 2 instalado + Macs en modo DFU
 # =============================================================================
 
-set -euo pipefail
+set -eo pipefail
 
 # ─── Colores ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 # ─── Configuración ────────────────────────────────────────────────────────────
-CFGUTIL=$(command -v cfgutil 2>/dev/null \
-  || ls /Library/Apple/usr/bin/cfgutil /usr/local/bin/cfgutil 2>/dev/null | head -1 \
-  || echo "")
+CFGUTIL=""
+if command -v cfgutil >/dev/null 2>&1; then
+  CFGUTIL=$(command -v cfgutil)
+elif [ -x "/Library/Apple/usr/bin/cfgutil" ]; then
+  CFGUTIL="/Library/Apple/usr/bin/cfgutil"
+elif [ -x "/usr/local/bin/cfgutil" ]; then
+  CFGUTIL="/usr/local/bin/cfgutil"
+fi
+
 LOG_DIR="$HOME/mac-restore-logs"
-IPSW_DIR="${IPSW_DIR:-$HOME/Downloads}"          # Carpeta donde buscar IPSW
-PARALLEL_MAX="${PARALLEL_MAX:-4}"                 # Máximo de restores simultáneos
-POLL_INTERVAL=5                                   # Segundos entre checks de dispositivos
+IPSW_DIR="${IPSW_DIR:-$HOME/Downloads}"
+PARALLEL_MAX="${PARALLEL_MAX:-4}"
+POLL_INTERVAL=5
+SELECTED_IPSW=""
 
 # ─── Banner ───────────────────────────────────────────────────────────────────
 banner() {
@@ -43,23 +50,20 @@ log_wrn() { log "${YELLOW}⚠${NC}  $*"; }
 check_prerequisites() {
   log_inf "Verificando prerequisitos..."
 
-  # macOS
-  if [[ "$(uname)" != "Darwin" ]]; then
+  if [ "$(uname)" != "Darwin" ]; then
     log_err "Este script solo funciona en macOS."; exit 1
   fi
 
-  # cfgutil
-  if [[ ! -x "$CFGUTIL" ]]; then
-    log_err "cfgutil no encontrado en $CFGUTIL"
+  if [ -z "$CFGUTIL" ] || [ ! -x "$CFGUTIL" ]; then
+    log_err "cfgutil no encontrado."
     echo -e "  ${YELLOW}→ Instala Apple Configurator 2 desde la App Store${NC}"
     echo -e "  ${YELLOW}→ Luego: Apple Configurator 2 > Menú > Instalar Herramientas de Automatización${NC}"
     exit 1
   fi
-  log_ok "cfgutil encontrado: $($CFGUTIL version 2>/dev/null || echo 'OK')"
+  log_ok "cfgutil: $CFGUTIL"
 
-  # Permisos sudo (necesario para restore)
   if ! sudo -n true 2>/dev/null; then
-    log_wrn "Se requieren permisos de administrador para el restore."
+    log_wrn "Se requieren permisos de administrador."
     sudo -v || { log_err "No se pudo autenticar."; exit 1; }
   fi
   log_ok "Permisos de administrador OK"
@@ -69,36 +73,39 @@ check_prerequisites() {
 select_ipsw() {
   log_inf "Buscando archivos IPSW en: $IPSW_DIR"
 
-  # Buscar IPSWs disponibles
   IPSW_FILES=()
   while IFS= read -r line; do
-    [[ -n "$line" ]] && IPSW_FILES+=("$line")
+    if [ -n "$line" ]; then
+      IPSW_FILES+=("$line")
+    fi
   done < <(find "$IPSW_DIR" -maxdepth 3 -name "*.ipsw" 2>/dev/null | sort)
 
-  if [[ ${#IPSW_FILES[@]} -eq 0 ]]; then
+  if [ ${#IPSW_FILES[@]} -eq 0 ]; then
     log_err "No se encontraron archivos .ipsw en $IPSW_DIR"
     echo -e "  ${YELLOW}→ Descarga el IPSW desde: https://ipsw.me${NC}"
     echo -e "  ${YELLOW}→ O especifica la ruta: IPSW_DIR=/ruta/a/carpeta ./restore.sh${NC}"
     exit 1
   fi
 
-  if [[ ${#IPSW_FILES[@]} -eq 1 ]]; then
+  if [ ${#IPSW_FILES[@]} -eq 1 ]; then
     SELECTED_IPSW="${IPSW_FILES[0]}"
     log_ok "IPSW encontrado: $(basename "$SELECTED_IPSW")"
     return
   fi
 
-  # Múltiples IPSWs — mostrar menú
   echo -e "\n${BOLD}Archivos IPSW disponibles:${NC}"
-  for i in "${!IPSW_FILES[@]}"; do
+  local i=0
+  while [ $i -lt ${#IPSW_FILES[@]} ]; do
     SIZE=$(du -h "${IPSW_FILES[$i]}" 2>/dev/null | cut -f1)
     echo -e "  ${CYAN}[$((i+1))]${NC} $(basename "${IPSW_FILES[$i]}") ${YELLOW}($SIZE)${NC}"
+    i=$((i+1))
   done
 
   echo ""
   while true; do
-    read -rp "$(echo -e "${BOLD}Selecciona el número del IPSW [1-${#IPSW_FILES[@]}]: ${NC}")" choice
-    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#IPSW_FILES[@]} )); then
+    printf "${BOLD}Selecciona el número del IPSW [1-${#IPSW_FILES[@]}]: ${NC}"
+    read -r choice
+    if echo "$choice" | grep -qE '^[0-9]+$' && [ "$choice" -ge 1 ] && [ "$choice" -le ${#IPSW_FILES[@]} ]; then
       SELECTED_IPSW="${IPSW_FILES[$((choice-1))]}"
       log_ok "IPSW seleccionado: $(basename "$SELECTED_IPSW")"
       break
@@ -107,9 +114,8 @@ select_ipsw() {
   done
 }
 
-# ─── Listar dispositivos conectados en DFU ────────────────────────────────────
+# ─── Listar dispositivos en DFU ───────────────────────────────────────────────
 get_dfu_devices() {
-  # cfgutil list devuelve JSON; extraemos ECIDs y nombres
   "$CFGUTIL" list 2>/dev/null || true
 }
 
@@ -121,7 +127,7 @@ get_ecids() {
 }
 
 count_devices() {
-  get_ecids | wc -l | tr -d ' '
+  get_ecids | grep -c '[0-9A-Fa-f]' || echo 0
 }
 
 # ─── Restore de un dispositivo ────────────────────────────────────────────────
@@ -141,24 +147,30 @@ restore_device() {
   fi
 }
 
-# ─── Restore paralelo de todos los dispositivos conectados ────────────────────
+# ─── Restore paralelo ─────────────────────────────────────────────────────────
 restore_all_parallel() {
   local ipsw="$1"
   local success_count=0
   local fail_count=0
-  # Dos arrays paralelos en vez de array asociativo (compatibilidad bash 3.2)
-  local pid_list=()
-  local ecid_list=()
+  local running=0
+  # Arrays paralelos (bash 3.2 no tiene arrays asociativos)
+  local pid_list
+  local ecid_list
+  pid_list=()
+  ecid_list=()
 
   log_inf "Iniciando restore paralelo (máx $PARALLEL_MAX simultáneos)..."
   echo ""
 
+  local ecids
   ecids=()
   while IFS= read -r line; do
-    [[ -n "$line" ]] && ecids+=("$line")
+    if [ -n "$line" ]; then
+      ecids+=("$line")
+    fi
   done < <(get_ecids)
 
-  if [[ ${#ecids[@]} -eq 0 ]]; then
+  if [ ${#ecids[@]} -eq 0 ]; then
     log_wrn "No hay dispositivos en DFU mode conectados."
     return 1
   fi
@@ -166,13 +178,13 @@ restore_all_parallel() {
   log_inf "Dispositivos detectados: ${BOLD}${#ecids[@]}${NC}"
   echo ""
 
-  local running=0
-  local queue=("${ecids[@]}")
+  local queue
+  queue=("${ecids[@]}")
 
-  while [[ ${#queue[@]} -gt 0 ]] || [[ $running -gt 0 ]]; do
+  while [ ${#queue[@]} -gt 0 ] || [ $running -gt 0 ]; do
 
     # Lanzar trabajos hasta el límite
-    while [[ ${#queue[@]} -gt 0 ]] && [[ $running -lt $PARALLEL_MAX ]]; do
+    while [ ${#queue[@]} -gt 0 ] && [ $running -lt $PARALLEL_MAX ]; do
       local ecid="${queue[0]}"
       queue=("${queue[@]:1}")
 
@@ -180,22 +192,21 @@ restore_all_parallel() {
       local pid=$!
       ecid_list+=("$ecid")
       pid_list+=("$pid")
-      (( running++ ))
+      running=$((running + 1))
       log_inf "  Proceso lanzado para ECID $ecid (PID: $pid)"
     done
 
-    # Revisar si algún proceso terminó
+    # Revisar procesos terminados
     local i=0
-    while [[ $i -lt ${#pid_list[@]} ]]; do
+    while [ $i -lt ${#pid_list[@]} ]; do
       local pid="${pid_list[$i]}"
       if ! kill -0 "$pid" 2>/dev/null; then
-        wait "$pid" && (( success_count++ )) || (( fail_count++ ))
-        # Eliminar del array sin associativo
+        wait "$pid" && success_count=$((success_count + 1)) || fail_count=$((fail_count + 1))
         pid_list=("${pid_list[@]:0:$i}" "${pid_list[@]:$((i+1))}")
         ecid_list=("${ecid_list[@]:0:$i}" "${ecid_list[@]:$((i+1))}")
-        (( running-- ))
+        running=$((running - 1))
       else
-        (( i++ ))
+        i=$((i + 1))
       fi
     done
 
@@ -205,32 +216,49 @@ restore_all_parallel() {
   echo ""
   echo -e "  ${BOLD}═══════════════ Resumen ═══════════════${NC}"
   echo -e "  ${GREEN}✓ Exitosos:  $success_count${NC}"
-  [[ $fail_count -gt 0 ]] && echo -e "  ${RED}✗ Fallidos:  $fail_count${NC}"
+  if [ $fail_count -gt 0 ]; then
+    echo -e "  ${RED}✗ Fallidos:  $fail_count${NC}"
+  fi
   echo -e "  ${BLUE}  Logs en:   $LOG_DIR${NC}"
   echo -e "  ${BOLD}════════════════════════════════════════${NC}"
 }
 
-# ─── Modo monitor: esperar nuevos dispositivos y restaurarlos auto ─────────────
+# ─── Modo monitor ─────────────────────────────────────────────────────────────
 monitor_mode() {
   local ipsw="$1"
   seen_ecids=()
 
   log_inf "${BOLD}Modo Monitor activo${NC} — conecta Macs en DFU para restaurarlos automáticamente"
-  log_inf "Presiona ${BOLD}Ctrl+C${NC} para detener.\n"
+  log_inf "Presiona ${BOLD}Ctrl+C${NC} para detener."
+  echo ""
 
   trap 'echo -e "\n${YELLOW}Monitor detenido.${NC}"; exit 0' INT
 
   while true; do
+    local current_ecids
     current_ecids=()
     while IFS= read -r line; do
-      [[ -n "$line" ]] && current_ecids+=("$line")
+      if [ -n "$line" ]; then
+        current_ecids+=("$line")
+      fi
     done < <(get_ecids)
 
-    for ecid in "${current_ecids[@]}"; do
-      if [[ -n "$ecid" ]] && [[ ! " ${seen_ecids[*]} " =~ " ${ecid} " ]]; then
-        seen_ecids+=("$ecid")
-        log_ok "Nuevo dispositivo detectado: ${CYAN}${ecid}${NC}"
-        restore_device "$ecid" "$ipsw" &
+    local ecid
+    for ecid in "${current_ecids[@]+"${current_ecids[@]}"}"; do
+      if [ -n "$ecid" ]; then
+        local already_seen=0
+        local s
+        for s in "${seen_ecids[@]+"${seen_ecids[@]}"}"; do
+          if [ "$s" = "$ecid" ]; then
+            already_seen=1
+            break
+          fi
+        done
+        if [ $already_seen -eq 0 ]; then
+          seen_ecids+=("$ecid")
+          log_ok "Nuevo dispositivo detectado: ${CYAN}${ecid}${NC}"
+          restore_device "$ecid" "$ipsw" &
+        fi
       fi
     done
 
@@ -238,7 +266,7 @@ monitor_mode() {
   done
 }
 
-# ─── Mostrar instrucciones DFU ─────────────────────────────────────────────────
+# ─── Instrucciones DFU ────────────────────────────────────────────────────────
 show_dfu_instructions() {
   echo -e "${BOLD}${YELLOW}"
   echo "  ┌─────────────────────────────────────────────────────┐"
@@ -263,7 +291,7 @@ main_menu() {
     echo -e "\n${BOLD}Dispositivos conectados:${NC}"
     device_count=$(count_devices)
 
-    if [[ "$device_count" -eq 0 ]]; then
+    if [ "$device_count" -eq 0 ]; then
       echo -e "  ${YELLOW}Ninguno detectado en DFU mode${NC}"
     else
       echo -e "  ${GREEN}${BOLD}$device_count dispositivo(s) en DFU mode${NC}"
@@ -280,16 +308,20 @@ main_menu() {
     echo -e "  ${CYAN}[q]${NC} Salir"
     echo ""
 
-    read -rp "$(echo -e "${BOLD}Selecciona una opción: ${NC}")" opt
+    printf "${BOLD}Selecciona una opción: ${NC}"
+    read -r opt
 
     case "$opt" in
       1)
-        if [[ "$device_count" -eq 0 ]]; then
+        if [ "$device_count" -eq 0 ]; then
           log_wrn "No hay dispositivos conectados en DFU mode."
         else
           echo -e "\n${YELLOW}⚠  ATENCIÓN: Se restaurarán $device_count Mac(s). Todos los datos serán eliminados.${NC}"
-          read -rp "$(echo -e "${BOLD}¿Confirmas? [s/N]: ${NC}")" confirm
-          [[ "$confirm" =~ ^[sS]$ ]] && restore_all_parallel "$ipsw"
+          printf "${BOLD}¿Confirmas? [s/N]: ${NC}"
+          read -r confirm
+          if [ "$confirm" = "s" ] || [ "$confirm" = "S" ]; then
+            restore_all_parallel "$ipsw"
+          fi
         fi
         ;;
       2) monitor_mode "$ipsw" ;;
