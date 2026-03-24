@@ -116,13 +116,28 @@ select_ipsw() {
 
 # ─── Listar dispositivos en DFU ───────────────────────────────────────────────
 get_dfu_devices() {
-  "$CFGUTIL" list 2>/dev/null || true
+  # Filtra solo dispositivos en modo DFU (ignora iPhones, iPads u otros Macs normales)
+  "$CFGUTIL" list 2>/dev/null | grep -i "DFU" || true
 }
 
 get_ecids() {
+  # Usa modo párrafo (RS="") para procesar cada bloque de dispositivo por separado.
+  # Solo extrae ECIDs de bloques que contengan "DFU" (ignora Macs/iPhones normales).
   "$CFGUTIL" list 2>/dev/null \
-    | grep -oE 'ECID:[[:space:]]*[0-9A-Fa-f]+' \
-    | awk '{print $2}' \
+    | awk '
+        BEGIN { RS="" }
+        /DFU/ {
+          n = split($0, lines, "\n")
+          for (i = 1; i <= n; i++) {
+            if (lines[i] ~ /ECID:/) {
+              val = lines[i]
+              sub(/.*ECID:[[:space:]]*/, "", val)
+              sub(/[^0-9A-Fa-f].*/, "", val)
+              if (length(val) > 0) print val
+            }
+          }
+        }
+      ' \
     || true
 }
 
