@@ -142,7 +142,7 @@ get_ecids() {
 }
 
 count_devices() {
-  get_ecids | grep -c '[0-9A-Fa-f]' || echo 0
+  get_ecids | wc -l | tr -d ' \t'
 }
 
 # ─── Restore de un dispositivo ────────────────────────────────────────────────
