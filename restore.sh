@@ -205,20 +205,43 @@ restore_all_parallel() {
   done
 
   echo ""
-  log_inf "Esperando que terminen todos..."
+  log_inf "Todos los restores en curso — esperando resultados..."
   echo ""
 
-  # Esperar a que terminen todos
-  local j=0
-  while [ $j -lt ${#pid_list[@]} ]; do
-    local pid="${pid_list[$j]}"
-    local ecid="${ecid_list[$j]}"
-    if wait "$pid"; then
-      success_count=$((success_count + 1))
-    else
-      fail_count=$((fail_count + 1))
-    fi
-    j=$((j + 1))
+  # Monitorear en tiempo real: revisar cada PID sin bloquear los demás
+  local done_flags
+  done_flags=()
+  local k=0
+  while [ $k -lt ${#pid_list[@]} ]; do
+    done_flags+=("0")
+    k=$((k + 1))
+  done
+
+  local total=${#pid_list[@]}
+  local finished=0
+
+  while [ $finished -lt $total ]; do
+    local m=0
+    while [ $m -lt $total ]; do
+      if [ "${done_flags[$m]}" = "0" ]; then
+        local pid="${pid_list[$m]}"
+        local ecid="${ecid_list[$m]}"
+        # kill -0 falla si el proceso ya terminó
+        if ! kill -0 "$pid" 2>/dev/null; then
+          if wait "$pid"; then
+            log_ok "Finalizado OK — ECID: ${CYAN}${ecid}${NC}"
+            success_count=$((success_count + 1))
+          else
+            log_err "Fallido definitivamente — ECID: ${CYAN}${ecid}${NC}"
+            fail_count=$((fail_count + 1))
+          fi
+          done_flags[$m]="1"
+          finished=$((finished + 1))
+        fi
+      fi
+      m=$((m + 1))
+    done
+    [ $finished -lt $total ] && sleep 2
   done
 
   echo ""
@@ -226,8 +249,8 @@ restore_all_parallel() {
   echo -e "  ${GREEN}✓ Exitosos:  $success_count${NC}"
   if [ $fail_count -gt 0 ]; then
     echo -e "  ${RED}✗ Fallidos:  $fail_count${NC}"
+    echo -e "  ${YELLOW}  Revisa los logs en: $LOG_DIR${NC}"
   fi
-  echo -e "  ${BLUE}  Logs en:   $LOG_DIR${NC}"
   echo -e "  ${BOLD}════════════════════════════════════════${NC}"
 }
 
