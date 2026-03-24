@@ -116,14 +116,15 @@ select_ipsw() {
 
 # ─── Listar dispositivos en DFU ───────────────────────────────────────────────
 get_dfu_devices() {
-  "$CFGUTIL" list 2>/dev/null || true
+  # Dispositivos en DFU tienen UDID: N/A — los Macs normales tienen UDID real
+  "$CFGUTIL" list 2>/dev/null | grep 'UDID:[[:space:]]*N/A' || true
 }
 
 get_ecids() {
-  # Extrae todos los ECIDs — cfgutil solo lista dispositivos gestionables.
-  # El restore fallará solo si el dispositivo no está en DFU, protegiendo Macs normales.
+  # Solo ECIDs de dispositivos en DFU (UDID: N/A en la misma línea)
   "$CFGUTIL" list 2>/dev/null \
-    | grep -oE 'ECID:[[:space:]]*[0-9A-Fa-f]+' \
+    | grep 'UDID:[[:space:]]*N/A' \
+    | grep -oE 'ECID:[[:space:]]*0x[0-9A-Fa-f]+' \
     | awk '{print $NF}' \
     || true
 }
