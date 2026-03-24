@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # =============================================================================
 #  mac-restore.sh — Restauración masiva de Macs Apple Silicon
 #  Requiere: Apple Configurator 2 instalado + Macs en modo DFU
@@ -70,7 +70,10 @@ select_ipsw() {
   log_inf "Buscando archivos IPSW en: $IPSW_DIR"
 
   # Buscar IPSWs disponibles
-  mapfile -t IPSW_FILES < <(find "$IPSW_DIR" -maxdepth 3 -name "*.ipsw" 2>/dev/null | sort)
+  IPSW_FILES=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && IPSW_FILES+=("$line")
+  done < <(find "$IPSW_DIR" -maxdepth 3 -name "*.ipsw" 2>/dev/null | sort)
 
   if [[ ${#IPSW_FILES[@]} -eq 0 ]]; then
     log_err "No se encontraron archivos .ipsw en $IPSW_DIR"
@@ -148,7 +151,10 @@ restore_all_parallel() {
   log_inf "Iniciando restore paralelo (máx $PARALLEL_MAX simultáneos)..."
   echo ""
 
-  mapfile -t ecids < <(get_ecids)
+  ecids=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && ecids+=("$line")
+  done < <(get_ecids)
 
   if [[ ${#ecids[@]} -eq 0 ]]; then
     log_wrn "No hay dispositivos en DFU mode conectados."
@@ -207,7 +213,10 @@ monitor_mode() {
   trap 'echo -e "\n${YELLOW}Monitor detenido.${NC}"; exit 0' INT
 
   while true; do
-    mapfile -t current_ecids < <(get_ecids)
+    current_ecids=()
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && current_ecids+=("$line")
+    done < <(get_ecids)
 
     for ecid in "${current_ecids[@]}"; do
       if [[ -n "$ecid" ]] && [[ ! " ${seen_ecids[*]} " =~ " ${ecid} " ]]; then
