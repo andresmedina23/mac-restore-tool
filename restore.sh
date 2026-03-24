@@ -23,6 +23,8 @@ fi
 LOG_DIR="$HOME/mac-restore-logs"
 IPSW_DIR="${IPSW_DIR:-$HOME/Downloads}"
 PARALLEL_MAX="${PARALLEL_MAX:-4}"
+MAX_RETRIES="${MAX_RETRIES:-3}"
+RETRY_WAIT="${RETRY_WAIT:-30}"
 POLL_INTERVAL=5
 SELECTED_IPSW=""
 
@@ -133,21 +135,34 @@ count_devices() {
   get_ecids | wc -l | tr -d ' \t'
 }
 
-# ─── Restore de un dispositivo ────────────────────────────────────────────────
+# ─── Restore de un dispositivo (con reintentos) ───────────────────────────────
 restore_device() {
   local ecid="$1"
   local ipsw="$2"
   local device_log="$LOG_DIR/device_${ecid}_$(date +%H%M%S).log"
+  local attempt=1
 
-  log_inf "Iniciando restore — ECID: ${CYAN}${ecid}${NC}"
+  while [ $attempt -le $MAX_RETRIES ]; do
+    if [ $attempt -gt 1 ]; then
+      log_wrn "Reintento $attempt/$MAX_RETRIES — ECID: ${CYAN}${ecid}${NC} (esperando ${RETRY_WAIT}s...)"
+      sleep "$RETRY_WAIT"
+    else
+      log_inf "Iniciando restore — ECID: ${CYAN}${ecid}${NC}"
+    fi
 
-  if "$CFGUTIL" --ecid "$ecid" restore -I "$ipsw" >> "$device_log" 2>&1; then
-    log_ok "Restore completado — ECID: ${CYAN}${ecid}${NC}"
-    return 0
-  else
-    log_err "Restore FALLIDO — ECID: ${CYAN}${ecid}${NC} — ver: $device_log"
-    return 1
-  fi
+    echo "--- Intento $attempt ($(date)) ---" >> "$device_log"
+
+    if "$CFGUTIL" --ecid "$ecid" restore -I "$ipsw" >> "$device_log" 2>&1; then
+      log_ok "Restore completado (intento $attempt) — ECID: ${CYAN}${ecid}${NC}"
+      return 0
+    fi
+
+    log_wrn "Intento $attempt fallido — ECID: ${CYAN}${ecid}${NC}"
+    attempt=$((attempt + 1))
+  done
+
+  log_err "Restore FALLIDO tras $MAX_RETRIES intentos — ECID: ${CYAN}${ecid}${NC} — ver: $device_log"
+  return 1
 }
 
 # ─── Restore paralelo ─────────────────────────────────────────────────────────
