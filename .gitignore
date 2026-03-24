@@ -1,0 +1,8 @@
+# Logs generados por el script
+mac-restore-logs/
+
+# macOS
+.DS_Store
+
+# IPSWs (son muy pesados para subir a git)
+*.ipsw
