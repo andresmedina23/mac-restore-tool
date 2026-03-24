@@ -144,9 +144,11 @@ restore_device() {
 # ─── Restore paralelo de todos los dispositivos conectados ────────────────────
 restore_all_parallel() {
   local ipsw="$1"
-  declare -A pids=()       # ecid -> PID
   local success_count=0
   local fail_count=0
+  # Dos arrays paralelos en vez de array asociativo (compatibilidad bash 3.2)
+  local pid_list=()
+  local ecid_list=()
 
   log_inf "Iniciando restore paralelo (máx $PARALLEL_MAX simultáneos)..."
   echo ""
@@ -164,7 +166,6 @@ restore_all_parallel() {
   log_inf "Dispositivos detectados: ${BOLD}${#ecids[@]}${NC}"
   echo ""
 
-  # Cola de trabajos con control de paralelismo
   local running=0
   local queue=("${ecids[@]}")
 
@@ -172,22 +173,29 @@ restore_all_parallel() {
 
     # Lanzar trabajos hasta el límite
     while [[ ${#queue[@]} -gt 0 ]] && [[ $running -lt $PARALLEL_MAX ]]; do
-      ecid="${queue[0]}"
+      local ecid="${queue[0]}"
       queue=("${queue[@]:1}")
 
       restore_device "$ecid" "$ipsw" &
-      pids[$ecid]=$!
+      local pid=$!
+      ecid_list+=("$ecid")
+      pid_list+=("$pid")
       (( running++ ))
-      log_inf "  Proceso lanzado para ECID $ecid (PID: ${pids[$ecid]})"
+      log_inf "  Proceso lanzado para ECID $ecid (PID: $pid)"
     done
 
-    # Esperar un trabajo que termine
-    for ecid in "${!pids[@]}"; do
-      pid="${pids[$ecid]}"
+    # Revisar si algún proceso terminó
+    local i=0
+    while [[ $i -lt ${#pid_list[@]} ]]; do
+      local pid="${pid_list[$i]}"
       if ! kill -0 "$pid" 2>/dev/null; then
         wait "$pid" && (( success_count++ )) || (( fail_count++ ))
-        unset "pids[$ecid]"
+        # Eliminar del array sin associativo
+        pid_list=("${pid_list[@]:0:$i}" "${pid_list[@]:$((i+1))}")
+        ecid_list=("${ecid_list[@]:0:$i}" "${ecid_list[@]:$((i+1))}")
         (( running-- ))
+      else
+        (( i++ ))
       fi
     done
 
@@ -205,7 +213,7 @@ restore_all_parallel() {
 # ─── Modo monitor: esperar nuevos dispositivos y restaurarlos auto ─────────────
 monitor_mode() {
   local ipsw="$1"
-  local seen_ecids=()
+  seen_ecids=()
 
   log_inf "${BOLD}Modo Monitor activo${NC} — conecta Macs en DFU para restaurarlos automáticamente"
   log_inf "Presiona ${BOLD}Ctrl+C${NC} para detener.\n"
