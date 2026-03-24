@@ -177,9 +177,6 @@ restore_all_parallel() {
   pid_list=()
   ecid_list=()
 
-  log_inf "Iniciando restore paralelo (máx $PARALLEL_MAX simultáneos)..."
-  echo ""
-
   local ecids
   ecids=()
   while IFS= read -r line; do
@@ -193,42 +190,35 @@ restore_all_parallel() {
     return 1
   fi
 
-  log_inf "Dispositivos detectados: ${BOLD}${#ecids[@]}${NC}"
+  log_inf "Iniciando restore de ${BOLD}${#ecids[@]} dispositivo(s) simultáneamente...${NC}"
   echo ""
 
-  local queue
-  queue=("${ecids[@]}")
+  # Lanzar todos a la vez
+  local i=0
+  while [ $i -lt ${#ecids[@]} ]; do
+    local ecid="${ecids[$i]}"
+    restore_device "$ecid" "$ipsw" &
+    pid_list+=("$!")
+    ecid_list+=("$ecid")
+    log_inf "  Lanzado: ECID $ecid"
+    i=$((i + 1))
+  done
 
-  while [ ${#queue[@]} -gt 0 ] || [ $running -gt 0 ]; do
+  echo ""
+  log_inf "Esperando que terminen todos..."
+  echo ""
 
-    # Lanzar trabajos hasta el límite
-    while [ ${#queue[@]} -gt 0 ] && [ $running -lt $PARALLEL_MAX ]; do
-      local ecid="${queue[0]}"
-      queue=("${queue[@]:1}")
-
-      restore_device "$ecid" "$ipsw" &
-      local pid=$!
-      ecid_list+=("$ecid")
-      pid_list+=("$pid")
-      running=$((running + 1))
-      log_inf "  Proceso lanzado para ECID $ecid (PID: $pid)"
-    done
-
-    # Revisar procesos terminados
-    local i=0
-    while [ $i -lt ${#pid_list[@]} ]; do
-      local pid="${pid_list[$i]}"
-      if ! kill -0 "$pid" 2>/dev/null; then
-        wait "$pid" && success_count=$((success_count + 1)) || fail_count=$((fail_count + 1))
-        pid_list=("${pid_list[@]:0:$i}" "${pid_list[@]:$((i+1))}")
-        ecid_list=("${ecid_list[@]:0:$i}" "${ecid_list[@]:$((i+1))}")
-        running=$((running - 1))
-      else
-        i=$((i + 1))
-      fi
-    done
-
-    sleep 1
+  # Esperar a que terminen todos
+  local j=0
+  while [ $j -lt ${#pid_list[@]} ]; do
+    local pid="${pid_list[$j]}"
+    local ecid="${ecid_list[$j]}"
+    if wait "$pid"; then
+      success_count=$((success_count + 1))
+    else
+      fail_count=$((fail_count + 1))
+    fi
+    j=$((j + 1))
   done
 
   echo ""
