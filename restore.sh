@@ -116,28 +116,15 @@ select_ipsw() {
 
 # ─── Listar dispositivos en DFU ───────────────────────────────────────────────
 get_dfu_devices() {
-  # Filtra solo dispositivos en modo DFU (ignora iPhones, iPads u otros Macs normales)
-  "$CFGUTIL" list 2>/dev/null | grep -i "DFU" || true
+  "$CFGUTIL" list 2>/dev/null || true
 }
 
 get_ecids() {
-  # Usa modo párrafo (RS="") para procesar cada bloque de dispositivo por separado.
-  # Solo extrae ECIDs de bloques que contengan "DFU" (ignora Macs/iPhones normales).
+  # Extrae todos los ECIDs — cfgutil solo lista dispositivos gestionables.
+  # El restore fallará solo si el dispositivo no está en DFU, protegiendo Macs normales.
   "$CFGUTIL" list 2>/dev/null \
-    | awk '
-        BEGIN { RS="" }
-        /DFU/ {
-          n = split($0, lines, "\n")
-          for (i = 1; i <= n; i++) {
-            if (lines[i] ~ /ECID:/) {
-              val = lines[i]
-              sub(/.*ECID:[[:space:]]*/, "", val)
-              sub(/[^0-9A-Fa-f].*/, "", val)
-              if (length(val) > 0) print val
-            }
-          }
-        }
-      ' \
+    | grep -oE 'ECID:[[:space:]]*[0-9A-Fa-f]+' \
+    | awk '{print $NF}' \
     || true
 }
 
@@ -250,7 +237,6 @@ monitor_mode() {
   trap 'echo -e "\n${YELLOW}Monitor detenido.${NC}"; exit 0' INT
 
   while true; do
-    local current_ecids
     current_ecids=()
     while IFS= read -r line; do
       if [ -n "$line" ]; then
@@ -258,24 +244,29 @@ monitor_mode() {
       fi
     done < <(get_ecids)
 
-    local ecid
-    for ecid in "${current_ecids[@]+"${current_ecids[@]}"}"; do
-      if [ -n "$ecid" ]; then
-        local already_seen=0
-        local s
-        for s in "${seen_ecids[@]+"${seen_ecids[@]}"}"; do
-          if [ "$s" = "$ecid" ]; then
+    if [ ${#current_ecids[@]} -gt 0 ]; then
+      ecid_idx=0
+      while [ $ecid_idx -lt ${#current_ecids[@]} ]; do
+        ecid="${current_ecids[$ecid_idx]}"
+        ecid_idx=$((ecid_idx + 1))
+
+        already_seen=0
+        s_idx=0
+        while [ $s_idx -lt ${#seen_ecids[@]} ]; do
+          if [ "${seen_ecids[$s_idx]}" = "$ecid" ]; then
             already_seen=1
             break
           fi
+          s_idx=$((s_idx + 1))
         done
+
         if [ $already_seen -eq 0 ]; then
           seen_ecids+=("$ecid")
           log_ok "Nuevo dispositivo detectado: ${CYAN}${ecid}${NC}"
           restore_device "$ecid" "$ipsw" &
         fi
-      fi
-    done
+      done
+    fi
 
     sleep "$POLL_INTERVAL"
   done
